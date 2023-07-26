@@ -11,6 +11,7 @@ import trimesh
 import numpy as np
 import jax.numpy as jnp
 from pathlib import Path
+import pythreejs as p3s
 
 from bayes3d._mkl.pose import pack_pose, lift_pose, unpack_pose, look_at, from_euler
 
@@ -121,7 +122,7 @@ MP_WORLD_VIEW = np.array([
     [ 0.0,  -1.0,  0.0]
 ])
 
-# %% ../../scripts/notebooks/_mkl/02 - Meshes.ipynb 17
+# %% ../../scripts/notebooks/_mkl/02 - Meshes.ipynb 15
 import meshplot as mp
 import numpy as np
 
@@ -200,7 +201,7 @@ class Viewer(object):
         self._v._cam.exec_three_obj_method('updateProjectionMatrix')
         return self
 
-# %% ../../scripts/notebooks/_mkl/02 - Meshes.ipynb 22
+# %% ../../scripts/notebooks/_mkl/02 - Meshes.ipynb 20
 def trimesh_from_2d_segs(segs):
     pieces = []
     for s in segs:
@@ -216,7 +217,7 @@ def trimesh_from_2d_segs(segs):
     map_mesh = trimesh.util.concatenate(pieces)
     return map_mesh
 
-# %% ../../scripts/notebooks/_mkl/02 - Meshes.ipynb 23
+# %% ../../scripts/notebooks/_mkl/02 - Meshes.ipynb 21
 import json 
 
 def load_env_data(fname):
@@ -228,7 +229,14 @@ def load_env_data(fname):
 def unpack_2d_env_data(fname):
     data = load_env_data(fname)
 
-    segs = np.array(data["segs"])
+    segs   = np.array(data["segs"])
+
+    # Convert clutter verts to segs
+    clutter = np.array(data["clutter_verts"])
+    clutter = data["clutter_verts"]
+    clutter = np.array(clutter)
+    clutter = np.stack([clutter[:,:-1,:], clutter[:,1:,:]], axis=2)
+    clutter = np.concatenate(clutter, axis=0).reshape(-1,4)
 
     xs  = np.array(data["paths"][0])
     dxs = xs[1:] - xs[:-1]
@@ -236,4 +244,4 @@ def unpack_2d_env_data(fname):
     dhds = hds[1:] - hds[:-1]
     xs  = xs[:-1]
     T   = len(xs)
-    return segs, xs, hds, dxs[:-1], dhds
+    return segs, clutter, xs, hds, dxs[:-1], dhds
