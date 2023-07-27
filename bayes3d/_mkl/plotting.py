@@ -28,8 +28,10 @@ def rgba_from_vals(vs, q=0.0, cmap="viridis", vmin=None, vmax=None):
 from matplotlib.collections import LineCollection
 
 
-def line_collection(a, b, cs, linewidth=1):
+def line_collection(a, b, c=None, linewidth=1, **kwargs):
     lines = np.column_stack((a, b)).reshape(-1, 2, 2)
-    lc = LineCollection(lines, colors=cs, linewidths=linewidth)
+    lc = LineCollection(lines, colors=c, linewidths=linewidth, **kwargs)
     return lc
+
+
 
