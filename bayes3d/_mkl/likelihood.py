@@ -60,7 +60,7 @@ def mix_std(ps, mus, stds):
     """Standard Deviation of a mixture of Gaussians."""
     return jnp.sqrt(jnp.sum(ps*stds**2) + jnp.sum(ps*mus**2) - (jnp.sum(ps*mus))**2)
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 8
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 7
 def img_mean_and_var(X, zmax, sig, w):
 
     # Pixel-wise mean and var
@@ -84,7 +84,7 @@ def img_mean_and_var(X, zmax, sig, w):
     mu, var = vmap(mean_and_var_ij)(I, J)
     return mu.reshape(*X.shape[:2]), var.reshape(*X.shape[:2])
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 10
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 9
 import functools
 
 
@@ -110,14 +110,13 @@ def or_outlier(logp, outlier, zmax):
 
 def constrained_lh(X, Y, zmax, sig, outlier, w:int):
     """"Likelihood of observation X conditioned on Y."""
-    # Y_   = jax.lax.pad(Y,  -100., ((w,w,0),(w,w,0),(0,0,0)) )
-    Y_ = pad_jit(Y,w)
+    Y_   = jax.lax.pad(Y,  -100., ((w,w,0),(w,w,0),(0,0,0)) )
     
     I, J = jnp.meshgrid(jnp.arange(X.shape[0]), jnp.arange(X.shape[1]))
     I = I.ravel()
     J = J.ravel()
 
-    f_ij = lambda i,j: constrained_lh_mix_ij(i, j, X[:,:,:3], Y_[:,:,:3], zmax, sig, w) 
+    f_ij  = lambda i,j: constrained_lh_mix_ij(i, j, X[:,:,:3], Y_[:,:,:3], zmax, sig, w) 
     logps = jax.vmap(f_ij)(I, J)
     
     logps = or_outlier(logps, outlier, zmax)
@@ -126,7 +125,7 @@ def constrained_lh(X, Y, zmax, sig, outlier, w:int):
 
 constrained_lh_jit = jit(constrained_lh,static_argnames=("w",))
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 13
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 12
 from genjax.generative_functions.distributions import ExactDensity
 
 class B3DImageLikelihood(ExactDensity):
