@@ -2,11 +2,11 @@
 
 # %% auto 0
 __all__ = ['normal_logpdf', 'truncnorm_pdf', 'truncnorm_logpdf', 'logsumexp', 'pad_jit', 'constrained_lh_jit',
-           'b3d_image_likelihood', 'get_1d_mixture_components', 'dslice', 'adjusted_dslice', 'pad', 'mix_std',
-           'img_mean_and_var', 'constrained_lh_mix', 'constrained_lh_mix_ij', 'or_outlier', 'constrained_lh',
+           'b3d_image_likelihood', 'dslice', 'adjusted_dslice', 'pad', 'mix_std', 'get_1d_mixture_components',
+           'constrained_lh_mix', 'constrained_lh_mix_ij', 'or_outlier', 'constrained_lh', 'img_mean_and_var',
            'B3DImageLikelihood']
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 2
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 3
 import jax
 from jax import (jit, vmap)
 import jax.numpy as jnp
@@ -14,7 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import genjax
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 3
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 4
 from scipy.stats import truncnorm as scipy_truncnormal
 
 normal_logpdf = jax.scipy.stats.norm.logpdf
@@ -22,24 +22,6 @@ truncnorm_pdf = jax.scipy.stats.truncnorm.pdf
 truncnorm_logpdf = jax.scipy.stats.truncnorm.logpdf
 logsumexp = jax.scipy.special.logsumexp
 
-
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 5
-def get_1d_mixture_components(x, ys, sig):
-
-    # 1D-Mixture components and value to evaluate.
-    # These are given by the distances ALONG ray through `x`
-    d  = jnp.linalg.norm(x)
-    ds = ys @ x / d
-    
-    # 1D-Mixture weights.
-    # First compute the distances TO ray through `x`
-    # and then transforming them appropriately.
-    ws = jnp.linalg.norm(ds[...,None] * x/d - ys, axis=-1)
-    ws = normal_logpdf(ws, loc=0.0, scale=sig)
-    ws = jnp.where(ws == -100., -jnp.inf, ws)
-    ws = ws - logsumexp(ws)
-
-    return d, ds, ws
 
 # %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 6
 # Some helper to keep code concise
@@ -61,6 +43,72 @@ def mix_std(ps, mus, stds):
     return jnp.sqrt(jnp.sum(ps*stds**2) + jnp.sum(ps*mus**2) - (jnp.sum(ps*mus))**2)
 
 # %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 7
+import functools
+
+
+#|export
+def get_1d_mixture_components(x, ys, sig):
+
+    # 1D-Mixture components and value to evaluate.
+    # These are given by the distances ALONG ray through `x`
+    d  = jnp.linalg.norm(x)
+    ds = ys @ x / d
+    
+    # 1D-Mixture weights.
+    # First compute the distances TO ray through `x`
+    # and then transforming them appropriately.
+    ws = jnp.linalg.norm(ds[...,None] * x/d - ys, axis=-1)
+    ws = normal_logpdf(ws, loc=0.0, scale=sig)
+    
+    # Check for padded values and (log-)zero out
+    ws = jnp.where(ys[...,2] == -100., -jnp.inf, ws)
+    ws = ws - logsumexp(ws)
+
+    return d, ds, ws
+
+
+def constrained_lh_mix(x, ys, zmax=100.0, sig=0.1):
+    d, ds, ws = get_1d_mixture_components(x, ys, sig)
+    
+    # Adjusted zmax: the range at which x intersects the far plane
+    # Depends on the behaviour we want...
+    zmax_ = d/x[2]*zmax
+
+    logps = truncnorm_logpdf(d, (0.0 - ds)/sig, (zmax_ - ds)/sig, loc=ds, scale=sig)
+    logp  = logsumexp(logps + ws)
+    
+    return logp
+
+
+def constrained_lh_mix_ij(i,j, X, Y_padded, zmax=100.0, sig=0.1, w=7):
+    x  = X[i, j, :3]
+    ys = dslice(Y_padded, i,j, w)
+
+    return constrained_lh_mix(x, ys, zmax=zmax, sig=sig)
+
+
+def or_outlier(logp, outlier, zmax):
+    return jnp.logaddexp(logp + jnp.log(1.0 - outlier), jnp.log(outlier) - jnp.log(zmax))
+
+
+def constrained_lh(X, Y, zmax, sig, outlier, w:int):
+    """"Likelihood of observation X conditioned on Y."""
+    Y_   = jax.lax.pad(Y,  -100., ((w,w,0),(w,w,0),(0,0,0)) )
+    
+    J, I = jnp.meshgrid(jnp.arange(X.shape[1]), jnp.arange(X.shape[0]))
+    I = I.ravel()
+    J = J.ravel()
+
+    f_ij  = lambda i,j: constrained_lh_mix_ij(i, j, X[:,:,:3], Y_[:,:,:3], zmax, sig, w) 
+    logps = jax.vmap(f_ij)(I, J)
+    
+    logps = or_outlier(logps, outlier, zmax)
+    return logps.sum()
+
+
+constrained_lh_jit = jit(constrained_lh,static_argnames=("w",))
+
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 11
 def img_mean_and_var(X, zmax, sig, w):
 
     # Pixel-wise mean and var
@@ -84,48 +132,7 @@ def img_mean_and_var(X, zmax, sig, w):
     mu, var = vmap(mean_and_var_ij)(I, J)
     return mu.reshape(*X.shape[:2]), var.reshape(*X.shape[:2])
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 9
-import functools
-
-
-def constrained_lh_mix(x, ys, zmax=100.0, sig=0.1):
-    d, ds, ws = get_1d_mixture_components(x, ys, sig)
-    
-    logps = truncnorm_logpdf(d, (0.0 - ds)/sig, (zmax - ds)/sig, loc=ds, scale=sig)
-    logp  = logsumexp(logps + ws)
-    
-    return logp
-
-
-def constrained_lh_mix_ij(i,j, X, Y_padded, zmax=100.0, sig=0.1, w=7):
-    x  = X[i, j, :3]
-    ys = dslice(Y_padded, i,j, w)
-
-    return constrained_lh_mix(x, ys, zmax=zmax, sig=sig)
-
-
-def or_outlier(logp, outlier, zmax):
-    return jnp.logaddexp(logp + jnp.log(1.0 - outlier), jnp.log(outlier) - jnp.log(zmax))
-
-
-def constrained_lh(X, Y, zmax, sig, outlier, w:int):
-    """"Likelihood of observation X conditioned on Y."""
-    Y_   = jax.lax.pad(Y,  -100., ((w,w,0),(w,w,0),(0,0,0)) )
-    
-    I, J = jnp.meshgrid(jnp.arange(X.shape[0]), jnp.arange(X.shape[1]))
-    I = I.ravel()
-    J = J.ravel()
-
-    f_ij  = lambda i,j: constrained_lh_mix_ij(i, j, X[:,:,:3], Y_[:,:,:3], zmax, sig, w) 
-    logps = jax.vmap(f_ij)(I, J)
-    
-    logps = or_outlier(logps, outlier, zmax)
-    return logps.sum()
-
-
-constrained_lh_jit = jit(constrained_lh,static_argnames=("w",))
-
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 12
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 15
 from genjax.generative_functions.distributions import ExactDensity
 
 class B3DImageLikelihood(ExactDensity):
