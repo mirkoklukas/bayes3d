@@ -3,8 +3,7 @@
 # %% auto 0
 __all__ = ['normal_logpdf', 'truncnorm_pdf', 'truncnorm_logpdf', 'logsumexp', 'pad_jit', 'constrained_lh_jit',
            'b3d_image_likelihood', 'dslice', 'adjusted_dslice', 'pad', 'mix_std', 'get_1d_mixture_components',
-           'constrained_lh_mix', 'constrained_lh_mix_ij', 'or_outlier', 'constrained_lh', 'img_mean_and_var',
-           'B3DImageLikelihood']
+           'constrained_lh_mix', 'constrained_lh_mix_ij', 'constrained_lh', 'img_mean_and_var', 'B3DImageLikelihood']
 
 # %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 3
 import jax
@@ -23,7 +22,7 @@ truncnorm_logpdf = jax.scipy.stats.truncnorm.logpdf
 logsumexp = jax.scipy.special.logsumexp
 
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 6
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 7
 # Some helper to keep code concise
 def dslice(X, i,j, w): 
     return  jax.lax.dynamic_slice(X, (i, j, 0), (2*w + 1, 2*w + 1, 3))   
@@ -42,8 +41,9 @@ def mix_std(ps, mus, stds):
     """Standard Deviation of a mixture of Gaussians."""
     return jnp.sqrt(jnp.sum(ps*stds**2) + jnp.sum(ps*mus**2) - (jnp.sum(ps*mus))**2)
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 7
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 10
 import functools
+from jax.experimental import checkify
 
 
 #|export
@@ -67,28 +67,34 @@ def get_1d_mixture_components(x, ys, sig):
     return d, ds, ws
 
 
-def constrained_lh_mix(x, ys, zmax=100.0, sig=0.1):
+def constrained_lh_mix(x, ys, zmax, sig, outlier):
+    # assert , 
+    # checkify.check(x[2] > 0.0, "z-coords need to be > 0, but you try to evaluate x = {x} ", x=x)
+    
+
     d, ds, ws = get_1d_mixture_components(x, ys, sig)
     
     # Adjusted zmax: the range at which x intersects the far plane
     # Depends on the behaviour we want...
     zmax_ = d/x[2]*zmax
+    
+    # TODO: should we clip actually??
+    d = jnp.clip(d, 0.0, zmax_)
 
     logps = truncnorm_logpdf(d, (0.0 - ds)/sig, (zmax_ - ds)/sig, loc=ds, scale=sig)
     logp  = logsumexp(logps + ws)
+
+    logp  = jnp.logaddexp(logp + jnp.log(1.0 - outlier), jnp.log(outlier) - jnp.log(zmax_))
     
-    return logp
+    return jnp.where(x[2] <= 0.0, -jnp.inf, logp)
 
-
-def constrained_lh_mix_ij(i,j, X, Y_padded, zmax=100.0, sig=0.1, w=7):
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 12
+def constrained_lh_mix_ij(i,j, X, Y_padded, zmax, sig, outlier, w):
     x  = X[i, j, :3]
     ys = dslice(Y_padded, i,j, w)
 
-    return constrained_lh_mix(x, ys, zmax=zmax, sig=sig)
+    return constrained_lh_mix(x, ys, zmax=zmax, sig=sig, outlier=outlier)
 
-
-def or_outlier(logp, outlier, zmax):
-    return jnp.logaddexp(logp + jnp.log(1.0 - outlier), jnp.log(outlier) - jnp.log(zmax))
 
 
 def constrained_lh(X, Y, zmax, sig, outlier, w:int):
@@ -99,16 +105,15 @@ def constrained_lh(X, Y, zmax, sig, outlier, w:int):
     I = I.ravel()
     J = J.ravel()
 
-    f_ij  = lambda i,j: constrained_lh_mix_ij(i, j, X[:,:,:3], Y_[:,:,:3], zmax, sig, w) 
+    f_ij  = lambda i,j: constrained_lh_mix_ij(i, j, X[:,:,:3], Y_[:,:,:3], zmax=zmax, sig=sig, outlier=outlier, w=w) 
     logps = jax.vmap(f_ij)(I, J)
-    
-    logps = or_outlier(logps, outlier, zmax)
+
     return logps.sum()
 
 
 constrained_lh_jit = jit(constrained_lh,static_argnames=("w",))
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 11
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 16
 def img_mean_and_var(X, zmax, sig, w):
 
     # Pixel-wise mean and var
@@ -132,7 +137,7 @@ def img_mean_and_var(X, zmax, sig, w):
     mu, var = vmap(mean_and_var_ij)(I, J)
     return mu.reshape(*X.shape[:2]), var.reshape(*X.shape[:2])
 
-# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 15
+# %% ../../scripts/notebooks/_mkl/01 - Likelihood Constrained to Rays.ipynb 20
 from genjax.generative_functions.distributions import ExactDensity
 
 class B3DImageLikelihood(ExactDensity):
