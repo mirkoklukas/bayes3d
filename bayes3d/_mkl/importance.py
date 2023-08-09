@@ -42,14 +42,14 @@ def _simulate(key, model, args):
 
 
 def _propose(key, model, args):
-    k, tr = model.simulate(key, args)
+    tr = model.simulate(key, args)
     # Note: `strip` returns a stripped choice map
-    return k, (tr.strip(), tr.get_score(), tr.get_retval())
+    return (tr.strip(), tr.get_score(), tr.get_retval())
 
 
 def _generate(key, model, args, constr):
-    k, (w, tr) = model.importance(key, constr, args)
-    return k, (tr, w)
+    (w, tr) = model.importance(key, constr, args)
+    return (tr, w)
 
 
 def _importance_sampling(key, 
@@ -69,17 +69,18 @@ def _importance_sampling(key,
     ```
     """
 
-    key, keys = keysplit(key,1,N)
 
     # Get some proposed choices
-    # and merge them into the given observation
-    keys, (prop_ch, prop_ws, _) = vmap(_propose, (0, None, None))(
+    key, keys = keysplit(key,1,N)
+    (prop_ch, prop_ws, _) = vmap(_propose, (0, None, None))(
         keys, proposal, proposal_args)
     
+    # Merge observations and proposal choices
     constr, _ = vmap(_merge, (0,None))(prop_ch, obs)
 
     # Generate new traces given these new constraints
-    keys, (trs, ws) = vmap(_generate, in_axes=(0,None,None,0))(
+    key, keys = keysplit(key,1,N)
+    (trs, ws) = vmap(_generate, in_axes=(0,None,None,0))(
         keys, model, args, constr)
     
     # Adjust the importance weights accordingly
@@ -88,6 +89,6 @@ def _importance_sampling(key,
     ws    = ws - total          # Log normalize
     lml   = total - jnp.log(N)  # Estimate of the (log) marginal likelihood
 
-    return key, (trs, ws, lml)
+    return (trs, ws, lml)
 
 
